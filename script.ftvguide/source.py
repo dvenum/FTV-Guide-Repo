@@ -61,7 +61,7 @@ class Channel(object):
 
 class Program(object):
     def __init__(self, channel, title, startDate, endDate, description, imageLarge=None, imageSmall=None,
-                 notificationScheduled=None):
+                 notificationScheduled=None, categories=[]):
         """
 
         @param channel:
@@ -72,6 +72,7 @@ class Program(object):
         @param description:
         @param imageLarge:
         @param imageSmall:
+        @param categories: list of Category objects
         """
         self.channel = channel
         self.title = title
@@ -81,11 +82,21 @@ class Program(object):
         self.imageLarge = imageLarge
         self.imageSmall = imageSmall
         self.notificationScheduled = notificationScheduled
+        self.categories = categories
 
     def __repr__(self):
         return 'Program(channel=%s, title=%s, startDate=%s, endDate=%s, description=%s, imageLarge=%s, imageSmall=%s)' % \
                (self.channel, self.title, self.startDate, self.endDate, self.description, self.imageLarge,
                 self.imageSmall)
+
+class Category(object):
+    def __init__(self, _id, descr, is_active):
+        self._id = _id
+        self.descr = descr
+        self.is_active = is_active
+
+    def __repr__(self):
+        return '%s' % (self.descr)
 
 
 class SourceException(Exception):
@@ -121,6 +132,7 @@ class Database(object):
         self.settingsChanged = None
         self.alreadyTriedUnlinking = False
         self.channelList = list()
+        self.categories_cache = None
 
         profilePath = xbmc.translatePath(ADDON.getAddonInfo('profile'))
         if not os.path.exists(profilePath):
@@ -382,6 +394,13 @@ class Database(object):
                         [channel, program.title, program.startDate, program.endDate, program.description,
                          program.imageLarge, program.imageSmall, self.source.KEY, updatesId])
 
+                    if program.categories:
+                        program_id = c.lastrowid
+                        for cat in program.categories:
+                            cat_id = self.get_categories_id(cat)
+                            c.execute('INSERT INTO cat_prog(cat_id,program_id) VALUES(?,?)',
+                                        [cat_id, program_id])
+
             # channels updated
             c.execute("UPDATE sources SET channels_updated=? WHERE id=?", [datetime.datetime.now(), self.source.KEY])
             self.conn.commit()
@@ -420,20 +439,32 @@ class Database(object):
             self.updateInProgress = False
             c.close()
 
+    def get_categories_id(self, category):
+        c = self.conn.cursor()
+        try:
+            c.execute(
+                'INSERT INTO categories(descr, active) VALUES(?,?)',
+                [category, False])
+        except sqlite3.IntegrityError:
+            rows = [r for r in c.execute('SELECT id FROM categories WHERE descr=?', [category])]
+            return rows[0]['id'] if rows else None
+        return c.lastrowid
+
+
     def getEPGView(self, channelStart, date=datetime.datetime.now(), progress_callback=None,
-                   clearExistingProgramList=True):
+                   clearExistingProgramList=True, active_category_id=0):
         result = self._invokeAndBlockForResult(self._getEPGView, channelStart, date, progress_callback,
-                                               clearExistingProgramList)
+                                               clearExistingProgramList, active_category_id)
 
         if self.updateFailed:
             raise SourceException('No channels or programs imported')
 
         return result
 
-    def _getEPGView(self, channelStart, date, progress_callback, clearExistingProgramList):
+    def _getEPGView(self, channelStart, date, progress_callback, clearExistingProgramList, aid):
         self._updateChannelAndProgramListCaches(date, progress_callback, clearExistingProgramList)
 
-        channels = self._getChannelList(onlyVisible=True)
+        channels = self._getChannelList(True, aid)
 
         if channelStart < 0:
             channelStart = len(channels) - 1
@@ -442,7 +473,7 @@ class Database(object):
         channelEnd = channelStart + Database.CHANNELS_PER_PAGE
         channelsOnPage = channels[channelStart: channelEnd]
 
-        programs = self._getProgramList(channelsOnPage, date)
+        programs = self._getProgramList(channelsOnPage, date, aid)
 
         return [channelStart, channelsOnPage, programs]
 
@@ -485,7 +516,7 @@ class Database(object):
 
     def getChannelList(self, onlyVisible=True):
         if not self.channelList or not onlyVisible:
-            result = self._invokeAndBlockForResult(self._getChannelList, onlyVisible)
+            result = self._invokeAndBlockForResult(self._getChannelList, onlyVisible, 0)
 
             if not onlyVisible:
                 return result
@@ -493,13 +524,21 @@ class Database(object):
             self.channelList = result
         return self.channelList
 
-    def _getChannelList(self, onlyVisible):
+    def _getChannelList(self, onlyVisible, aid):
         c = self.conn.cursor()
         channelList = list()
+        params = [self.source.KEY]
+        ov = av = ''
         if onlyVisible:
-            c.execute('SELECT * FROM channels WHERE source=? AND visible=? ORDER BY weight', [self.source.KEY, True])
-        else:
-            c.execute('SELECT * FROM channels WHERE source=? ORDER BY weight', [self.source.KEY])
+            ov = 'AND visible=?'
+            params.append(True)
+        if aid > 0:
+            av = """ AND EXISTS (SELECT id from programs where programs.id in 
+                    (SELECT program_id FROM cat_prog WHERE cat_id=?) AND channels.id=programs.channel
+                 ) """
+            params.append(aid)
+        c.execute('SELECT * FROM channels WHERE source=? %s %s ORDER BY weight' % 
+                (ov,av), params)
         for row in c:
             channel = Channel(row['id'], row['title'], row['logo'], row['stream_url'], row['visible'], row['weight'])
             channelList.append(channel)
@@ -563,13 +602,14 @@ class Database(object):
 
         return previousProgram
 
-    def _getProgramList(self, channels, startTime):
+    def _getProgramList(self, channels, startTime, aid):
         """
 
         @param channels:
         @type channels: list of source.Channel
         @param startTime:
         @type startTime: datetime.datetime
+        @param aid: active category id
         @return:
         """
         endTime = startTime + datetime.timedelta(hours=2)
@@ -584,16 +624,77 @@ class Database(object):
             return []
 
         c = self.conn.cursor()
+        params = [self.source.KEY, startTime, endTime]
+        ifst = ''
+        if aid > 0:
+            params.append(aid)
+            ifst = 'AND p.id in (SELECT program_id FROM cat_prog WHERE cat_id=?)'
         c.execute(
             'SELECT p.*, (SELECT 1 FROM notifications n WHERE n.channel=p.channel AND n.program_title=p.title AND n.source=p.source) AS notification_scheduled FROM programs p WHERE p.channel IN (\'' + (
-                '\',\''.join(channelMap.keys())) + '\') AND p.source=? AND p.end_date > ? AND p.start_date < ?',
-            [self.source.KEY, startTime, endTime])
+                '\',\''.join(channelMap.keys())) + '\') AND p.source=? AND p.end_date > ? AND p.start_date < ? %s' % ifst,
+            params)
         for row in c:
             program = Program(channelMap[row['channel']], row['title'], row['start_date'], row['end_date'],
                               row['description'], row['image_large'], row['image_small'], row['notification_scheduled'])
+            program.categories = self._getProgramCategories(row['id'])
             programList.append(program)
 
         return programList
+
+    def _getProgramCategories(self, program_id):
+        c = self.conn.cursor()
+        cats = []
+        c.execute(
+            'SELECT * FROM categories WHERE id IN (SELECT cat_id FROM cat_prog WHERE program_id=?)',
+            [program_id])
+        if not c: return cats
+        for row in c.fetchall():
+            cats.append(Category(row['id'], row['descr'], row['active']))
+        return cats
+
+    def getCategoryId(self, descr):
+        return self._invokeAndBlockForResult(self._getCategoryId, descr)
+
+    def _getCategoryId(self, descr):
+        c = self.conn.cursor()
+        c.execute(
+            'SELECT id FROM categories WHERE descr=?',
+            [descr])
+        if not c: return None
+        return c.fetchone()['id']
+
+    def getAllCategories(self):
+        if not self.categories_cache:
+            cats = self._invokeAndBlockForResult(self._getAllCategories)
+            self.categories_cache = cats
+        else:
+            cats = self.categories_cache
+        return cats
+
+    def _getAllCategories(self):
+        c = self.conn.cursor()
+        res = c.execute(
+            'SELECT * FROM categories ORDER BY descr')
+        if not res: return None
+        categories = []
+        for r in res.fetchall():
+            cat = Category(r['id'], r['descr'], r['active'])
+            categories.append(cat)
+        return categories
+
+    def updateCategories(self, categories, cache=False):
+        if not categories: return None
+        if cache: self.categories_cache = categories
+        else:
+            self._invokeAndBlockForResult(self._updateCategories, categories)
+        return True
+
+    def _updateCategories(self, categories):
+        c = self.conn.cursor()
+        for cat in categories:
+            c.execute('UPDATE categories SET active=? WHERE id=?',
+                [cat.is_active, cat._id])
+        self.conn.commit()
 
     def _isProgramListCacheExpired(self, date=datetime.datetime.now()):
         # check if data is up-to-date in database
@@ -691,10 +792,15 @@ class Database(object):
                 c.execute(
                     'CREATE TABLE channels(id TEXT, title TEXT, logo TEXT, stream_url TEXT, source TEXT, visible BOOLEAN, weight INTEGER, PRIMARY KEY (id, source), FOREIGN KEY(source) REFERENCES sources(id) ON DELETE CASCADE)')
                 c.execute(
-                    'CREATE TABLE programs(channel TEXT, title TEXT, start_date TIMESTAMP, end_date TIMESTAMP, description TEXT, image_large TEXT, image_small TEXT, source TEXT, updates_id INTEGER, FOREIGN KEY(channel, source) REFERENCES channels(id, source) ON DELETE CASCADE, FOREIGN KEY(updates_id) REFERENCES updates(id) ON DELETE CASCADE)')
+                    'CREATE TABLE programs(id INTEGER PRIMARY KEY, channel TEXT, title TEXT, start_date TIMESTAMP, end_date TIMESTAMP, description TEXT, image_large TEXT, image_small TEXT, source TEXT, updates_id INTEGER, FOREIGN KEY(channel, source) REFERENCES channels(id, source) ON DELETE CASCADE, FOREIGN KEY(updates_id) REFERENCES updates(id) ON DELETE CASCADE)')
+                c.execute(
+                    'CREATE TABLE categories(id INTEGER PRIMARY KEY, descr TEXT UNIQUE, active BOOLEAN)')
+                c.execute(
+                    'CREATE TABLE cat_prog(id INTEGER PRIMARY KEY, cat_id, program_id, FOREIGN KEY(cat_id) REFERENCES categories(id) ON DELETE CASCADE, FOREIGN KEY(program_id) REFERENCES programs(id) ON DELETE CASCADE)')
                 c.execute('CREATE INDEX program_list_idx ON programs(source, channel, start_date, end_date)')
                 c.execute('CREATE INDEX start_date_idx ON programs(start_date)')
                 c.execute('CREATE INDEX end_date_idx ON programs(end_date)')
+                c.execute('CREATE INDEX cat_prog_idx ON cat_prog(cat_id)')
 
                 # For active setting
                 c.execute('CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT)')
@@ -711,7 +817,7 @@ class Database(object):
                 c.execute(
                     'CREATE TABLE channels(id TEXT, title TEXT, logo TEXT, stream_url TEXT, source TEXT, visible BOOLEAN, weight INTEGER, PRIMARY KEY (id, source), FOREIGN KEY(source) REFERENCES sources(id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED)')
                 c.execute(
-                    'CREATE TABLE programs(channel TEXT, title TEXT, start_date TIMESTAMP, end_date TIMESTAMP, description TEXT, image_large TEXT, image_small TEXT, source TEXT, updates_id INTEGER, FOREIGN KEY(channel, source) REFERENCES channels(id, source) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED, FOREIGN KEY(updates_id) REFERENCES updates(id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED)')
+                    'CREATE TABLE programs(id INTEGER PRIMARY KEY, channel TEXT, title TEXT, start_date TIMESTAMP, end_date TIMESTAMP, description TEXT, image_large TEXT, image_small TEXT, source TEXT, updates_id INTEGER, FOREIGN KEY(channel, source) REFERENCES channels(id, source) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED, FOREIGN KEY(updates_id) REFERENCES updates(id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED)')
                 c.execute('CREATE INDEX program_list_idx ON programs(source, channel, start_date, end_date)')
                 c.execute('CREATE INDEX start_date_idx ON programs(start_date)')
                 c.execute('CREATE INDEX end_date_idx ON programs(end_date)')
@@ -938,6 +1044,8 @@ class XMLTVSource(Source):
                 if elem.tag == "programme":
                     channel = elem.get("channel")
                     description = elem.findtext("desc")
+                    xcat = elem.findall("category")
+                    categories = [c.text for c in xcat] if xcat else []
                     iconElement = elem.find("icon")
                     icon = None
                     if iconElement is not None:
@@ -945,7 +1053,8 @@ class XMLTVSource(Source):
                     if not description:
                         description = strings(NO_DESCRIPTION)
                     result = Program(channel, elem.findtext('title'), self.parseXMLTVDate(elem.get('start')),
-                                     self.parseXMLTVDate(elem.get('stop')), description, imageSmall=icon)
+                                     self.parseXMLTVDate(elem.get('stop')), description, imageSmall=icon,
+                                     categories=categories)
 
                 elif elem.tag == "channel":
                     id = elem.get("id")

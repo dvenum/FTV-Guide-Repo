@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 #
 #      Copyright (C) 2014 Tommy Winther
 #      http://tommy.winther.nu
@@ -130,6 +131,7 @@ class TVGuide(xbmcgui.WindowXML):
         self.redrawingEPG = False
         self.isClosing = False
         self.controlAndProgramList = list()
+        self.controlCategories = []
         self.ignoreMissingControlIds = list()
         self.channelIdx = 0
         self.focusPoint = Point()
@@ -140,6 +142,7 @@ class TVGuide(xbmcgui.WindowXML):
 
         self.mode = MODE_EPG
         self.currentChannel = None
+        self.active_category_id = 0
 
         self.osdEnabled = ADDON.getSetting('enable.osd') == 'true' and ADDON.getSetting(
             'alternative.playback') != 'true'
@@ -200,7 +203,7 @@ class TVGuide(xbmcgui.WindowXML):
                 self.close()
                 return
             self.database.initialize(self.onSourceInitialized, self.isSourceInitializationCancelled)
-            
+
         self.updateTimebar()
 
     def onAction(self, action):
@@ -367,7 +370,9 @@ class TVGuide(xbmcgui.WindowXML):
             return
 
         program = self._getProgramFromControl(self.getControl(controlId))
-        if program is None:
+        if program is None:     # no event of program button
+            if self.categoriesOnClick(controlId):
+                self.onRedrawEPG(self.channelIdx, self.viewStartDate)
             return
 
         if not self.playChannel(program.channel):
@@ -426,10 +431,10 @@ class TVGuide(xbmcgui.WindowXML):
 
         elif buttonClicked == PopupMenu.C_POPUP_LIBTV:
             xbmc.executebuiltin('ActivateWindow(Videos,videodb://tvshows/titles/)')
-			
+
         elif buttonClicked == PopupMenu.C_POPUP_VIDEOADDONS:
             xbmc.executebuiltin('ActivateWindow(Videos,addons://sources/video/)')
-			
+
     def setFocusId(self, controlId):
         control = self.getControl(controlId)
         if control:
@@ -640,7 +645,7 @@ class TVGuide(xbmcgui.WindowXML):
         self._clearEpg()
 
         try:
-            self.channelIdx, channels, programs = self.database.getEPGView(channelStart, startTime, self.onSourceProgressUpdate, clearExistingProgramList=False)
+            self.channelIdx, channels, programs = self.database.getEPGView(channelStart, startTime, self.onSourceProgressUpdate, clearExistingProgramList=False, active_category_id=self.active_category_id)
         except src.SourceException:
             self.onEPGLoadError()
             return
@@ -743,6 +748,8 @@ class TVGuide(xbmcgui.WindowXML):
         if focusControl is None and len(self.controlAndProgramList) > 0:
             self.setFocus(self.controlAndProgramList[0].control)
 
+        self.createCategories()
+
         self._hideControl(self.C_MAIN_LOADING)
         self.redrawingEPG = False
 
@@ -757,6 +764,9 @@ class TVGuide(xbmcgui.WindowXML):
                 except RuntimeError:
                     pass  # happens if we try to remove a control that doesn't exist
         del self.controlAndProgramList[:]
+
+        self.removeControls(self.controlCategories)
+        del self.controlCategories[:]
 
     def onEPGLoadError(self):
         self.redrawingEPG = False
@@ -959,6 +969,92 @@ class TVGuide(xbmcgui.WindowXML):
         if scheduleTimer and not xbmc.abortRequested and not self.isClosing:
             threading.Timer(1, self.updateTimebar).start()
 
+    def categoriesOnClick(self, controlId):
+        control = self.getControl(controlId)
+        if not control or not isinstance(control, xbmcgui.ControlButton):
+            return False
+        label = control.getLabel()
+        categories = self.database.getAllCategories()
+        if label == '^':
+            category_choice = 0
+            while True and category_choice != -1:     # start selection loop
+                userchoice = []
+                for c in categories:
+                    issel = '* ' if c.is_active else ''
+                    userchoice.append("%s%s" % (issel, c.descr))
+                userchoice.append('Done')
+                category_choice = xbmcgui.Dialog().select("Choose categories", userchoice)
+                selected = userchoice[category_choice]
+                new_value = True
+                if selected == 'Done': break
+                if selected.startswith('* '):
+                    new_value = False
+                    selected = selected[2:]
+                for i in range(len(categories)):
+                    if selected == categories[i].descr:
+                        categories[i].is_active = new_value
+                        self.database.updateCategories(categories,cache=True)
+            self.database.updateCategories(categories,cache=False)  # write to db
+            return True
+        else:
+            descrs = [c.descr for c in categories]
+            if label not in descrs: return False
+            nc = self.database.getCategoryId(label)
+            if nc and nc != self.active_category_id:
+                self.active_category_id = nc
+            else:
+                self.active_category_id = 0
+            return True     # force redraw
+        return False
+
+    def createCategories(self, ):
+        # buttons for filter of categories
+        if self.mode != MODE_EPG:
+            return
+        control = self.getControl(self.C_MAIN_EPG_VIEW_MARKER)
+        if control:
+            (x, y) = control.getPosition()
+        else:
+            return
+
+        categories = self.database.getAllCategories()
+        if not categories or len(categories) <= 0: return
+        active = [a for a in categories if a.is_active]
+
+        sc = 8
+        width = min(100, self.epgView.width / sc)
+        height = self.epgView.cellHeight / 2
+        controls = []
+        tvg = 'tvguide-program-grey.png'
+        tvl = 'tvguide-program-grey-focus.png'
+        control = xbmcgui.ControlButton(
+            x,
+            y - height*2 - 4,
+            30,
+            height,
+            "^",
+            noFocusTexture=tvg,
+            focusTexture=tvl
+        )
+        controls.append(control)
+        for n in range(0, min(sc,len(active)-1) +1 ):
+            _tvg = tvg if active[n]._id != self.active_category_id else tvl
+            _tvl = tvl
+            control = xbmcgui.ControlButton(
+                x + 30 + width*(n),
+                y - height*2 - 4,
+                width,
+                height,
+                active[n].descr,
+                noFocusTexture=_tvg,
+                focusTexture=_tvl
+            )
+            controls.append(control)
+        if controls:
+            self.addControls(controls)
+            self.controlCategories = controls
+            self.ignoreMissingControlIds.extend([c.getId() for c in self.controlCategories])
+
 
 class PopupMenu(xbmcgui.WindowXMLDialog):
     C_POPUP_PLAY = 4000
@@ -972,8 +1068,8 @@ class PopupMenu(xbmcgui.WindowXMLDialog):
     C_POPUP_LIBMOV = 80000
     C_POPUP_LIBTV = 80001
     C_POPUP_VIDEOADDONS = 80002
-	
-	
+
+
     def __new__(cls, database, program, showRemind):
         return super(PopupMenu, cls).__new__(cls, 'script-tvguide-menu.xml', ADDON.getAddonInfo('path'), SKIN)
 
@@ -1066,7 +1162,7 @@ class ChannelsMenu(xbmcgui.WindowXMLDialog):
         self.database = database
         self.channelList = database.getChannelList(onlyVisible=False)
         self.swapInProgress = False
-        
+
         self.selectedChannel = 0
 
     def onInit(self):
@@ -1092,7 +1188,7 @@ class ChannelsMenu(xbmcgui.WindowXMLDialog):
             self.getControl(self.C_CHANNELS_SELECTION_VISIBLE).setVisible(True)
             xbmc.sleep(350)
             self.setFocusId(self.C_CHANNELS_LIST)
-            
+
         elif self.getFocusId() == self.C_CHANNELS_SELECTION and action.getId() in [ACTION_PREVIOUS_MENU, KEY_CONTEXT_MENU]:
             listControl = self.getControl(self.C_CHANNELS_LIST)
             idx = listControl.getSelectedPosition()
