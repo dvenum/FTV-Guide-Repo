@@ -80,7 +80,7 @@ For any more help please visit TVAddons.ag</label>
 
         <control type="button" id="4000"><!-- Watch Stream -->
             <posx>160</posx>
-            <posy>228</posy>
+            <posy>176</posy>
             <width>240</width>
             <height>50</height>
             <texturefocus>menu-grey-focus.png</texturefocus>
@@ -95,7 +95,7 @@ For any more help please visit TVAddons.ag</label>
 
         <control type="button" id="4001"><!-- Choose Stream -->
             <posx>160</posx>
-            <posy>280</posy>
+            <posy>228</posy>
             <width>240</width>
             <height>50</height>
             <texturefocus>menu-grey-focus.png</texturefocus>
@@ -110,7 +110,7 @@ For any more help please visit TVAddons.ag</label>
         </control>
         <control type="label"><!-- Choose Stream Text -->
             <posx>20</posx>
-            <posy>260</posy>
+            <posy>248</posy>
             <width>240</width>
             <height>200</height>
             <font>font13</font>
@@ -133,7 +133,7 @@ For any more help please visit TVAddons.ag</label>
         </control>
         <control type="button" id="4002"><!-- REMINDER -->
             <posx>160</posx>
-            <posy>332</posy>
+            <posy>280</posy>
             <width>240</width>
             <height>50</height>
             <texturefocus>menu-grey-focus.png</texturefocus>
@@ -147,18 +147,33 @@ For any more help please visit TVAddons.ag</label>
         </control>
         <control type="button" id="4003"><!-- CHANNELS -->
             <posx>160</posx>
-            <posy>384</posy>
+            <posy>332</posy>
             <width>240</width>
             <height>50</height>
             <texturefocus>menu-grey-focus.png</texturefocus>
             <texturenofocus>menu-grey.png</texturenofocus>
             <onup>4002</onup>
-            <ondown>80000</ondown>
+            <ondown>4005</ondown>
             <align>center</align>
             <aligny>center</aligny>
             <font>font13</font>
             <textcolor>ffffffff</textcolor>
             <label>$ADDON[script.ftvguide 30307]</label>
+        </control>
+        <control type="button" id="4005"><!-- CATEGORIES -->
+            <posx>160</posx>
+            <posy>384</posy>
+            <width>240</width>
+            <height>50</height>
+            <texturefocus>menu-grey-focus.png</texturefocus>
+            <texturenofocus>menu-grey.png</texturenofocus>
+            <onup>4003</onup>
+            <ondown>80000</ondown>
+            <align>center</align>
+            <aligny>center</aligny>
+            <font>font13</font>
+            <textcolor>ffffffff</textcolor>
+            <label>$ADDON[script.ftvguide 30309]</label>
         </control>
 		
         <control type="button" id="80000"><!-- MY MOVIES -->
@@ -168,7 +183,7 @@ For any more help please visit TVAddons.ag</label>
             <height>50</height>
             <texturefocus>menu-grey-focus.png</texturefocus>
             <texturenofocus>menu-grey.png</texturenofocus>
-            <onup>4002</onup>
+            <onup>4005</onup>
             <ondown>80001</ondown>
             <align>center</align>
             <aligny>center</aligny>

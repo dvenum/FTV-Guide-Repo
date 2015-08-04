@@ -344,6 +344,10 @@ msgctxt "#30308"
 msgid "Quit"
 msgstr ""
 
+msgctxt "#30309"
+msgid "Categories"
+msgstr ""
+
 #empty strings from id 30309 to 30499
 
 msgctxt "#30500"
@@ -455,6 +459,10 @@ msgstr ""
 
 msgctxt "#31002"
 msgid "Current local data will be kept for now..."
+msgstr ""
+
+msgctxt "#31003"
+msgid "Change your active categories"
 msgstr ""
 
 msgctxt "#80000"

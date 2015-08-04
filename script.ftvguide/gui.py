@@ -417,6 +417,12 @@ class TVGuide(xbmcgui.WindowXML):
         elif buttonClicked == PopupMenu.C_POPUP_PLAY:
             self.playChannel(program.channel)
 
+        elif buttonClicked == PopupMenu.C_POPUP_CATEGORIES:
+            d = CategoriesMenu(self.database)
+            d.doModal()
+            del d
+            self.onRedrawEPG(self.channelIdx, self.viewStartDate)
+
         elif buttonClicked == PopupMenu.C_POPUP_CHANNELS:
             d = ChannelsMenu(self.database)
             d.doModal()
@@ -975,37 +981,14 @@ class TVGuide(xbmcgui.WindowXML):
             return False
         label = control.getLabel()
         categories = self.database.getAllCategories()
-        if label == '^':
-            category_choice = 0
-            while True and category_choice != -1:     # start selection loop
-                userchoice = []
-                for c in categories:
-                    issel = '* ' if c.is_active else ''
-                    userchoice.append("%s%s" % (issel, c.descr))
-                userchoice.append('Done')
-                category_choice = xbmcgui.Dialog().select("Choose categories", userchoice)
-                selected = userchoice[category_choice]
-                new_value = True
-                if selected == 'Done': break
-                if selected.startswith('* '):
-                    new_value = False
-                    selected = selected[2:]
-                for i in range(len(categories)):
-                    if selected == categories[i].descr:
-                        categories[i].is_active = new_value
-                        self.database.updateCategories(categories,cache=True)
-            self.database.updateCategories(categories,cache=False)  # write to db
-            return True
+        descrs = [c.descr for c in categories]
+        if label not in descrs: return False
+        nc = self.database.getCategoryId(label)
+        if nc and nc != self.active_category_id:
+            self.active_category_id = nc
         else:
-            descrs = [c.descr for c in categories]
-            if label not in descrs: return False
-            nc = self.database.getCategoryId(label)
-            if nc and nc != self.active_category_id:
-                self.active_category_id = nc
-            else:
-                self.active_category_id = 0
-            return True     # force redraw
-        return False
+            self.active_category_id = 0
+        return True     # force redraw
 
     def createCategories(self, ):
         # buttons for filter of categories
@@ -1027,16 +1010,6 @@ class TVGuide(xbmcgui.WindowXML):
         controls = []
         tvg = 'tvguide-program-grey.png'
         tvl = 'tvguide-program-grey-focus.png'
-        control = xbmcgui.ControlButton(
-            x,
-            y - height*2 - 4,
-            30,
-            height,
-            "^",
-            noFocusTexture=tvg,
-            focusTexture=tvl
-        )
-        controls.append(control)
         for n in range(0, min(sc,len(active)-1) +1 ):
             _tvg = tvg if active[n]._id != self.active_category_id else tvl
             _tvl = tvl
@@ -1061,6 +1034,7 @@ class PopupMenu(xbmcgui.WindowXMLDialog):
     C_POPUP_CHOOSE_STREAM = 4001
     C_POPUP_REMIND = 4002
     C_POPUP_CHANNELS = 4003
+    C_POPUP_CATEGORIES = 4005
     C_POPUP_QUIT = 4004
     C_POPUP_CHANNEL_LOGO = 4100
     C_POPUP_CHANNEL_TITLE = 4101
@@ -1142,6 +1116,320 @@ class PopupMenu(xbmcgui.WindowXMLDialog):
     def onFocus(self, controlId):
         pass
 
+
+class CategoriesMenu(xbmcgui.WindowDialog):
+    CATS_PER_COLUMN = 11
+    COLUMNS_PER_PAGE = 5
+    btn_width = 184
+    btn_height = 31
+
+    database = None
+    buttons = []
+    cellar = []         # left/right and save/cancel buttons
+    cellar_position = 0
+    is_cellar = False   # true when focus assigned to anything from cellar
+    labels = []
+    start_column = 0
+    current_focus = None
+    tvg = 'tvguide-program-grey.png'
+    tvl = 'tvguide-program-grey-focus.png'
+
+    def __init__(self,database):
+        self.database = database
+        self.categories = self.database.getAllCategories()
+        controls = []
+
+        self.pages = len(self.categories)/ (self.CATS_PER_COLUMN*self.COLUMNS_PER_PAGE)
+        if len(self.categories) % (self.CATS_PER_COLUMN*self.COLUMNS_PER_PAGE) != 0:
+            self.pages += 1
+
+        control = xbmcgui.ControlImage( # background
+            150, 100,
+            1010, 510,
+            "%s/resources/skins/%s/media/%s" % \
+                        (ADDON.getAddonInfo('path'), SKIN, "menu-stream.png")
+        )
+        controls.append(control)
+        self.caption = xbmcgui.ControlLabel( # 'Change your active categories
+            150+20, 100+20,
+            320, 32,
+            ADDON.getLocalizedString(31003)
+        )
+        controls.append(self.caption)
+        self.button_left = xbmcgui.ControlButton(
+            180, 560,
+            36, 30,
+            '<',
+            focusTexture = self.tvl,
+            noFocusTexture = self.tvg
+        )
+        controls.append(self.button_left)
+        self.cellar.append(self.button_left)
+        self.button_right = xbmcgui.ControlButton(
+            220, 560,
+            36, 30,
+            '>',
+            focusTexture = self.tvl,
+            noFocusTexture = self.tvg
+        )
+        controls.append(self.button_right)
+        self.cellar.append(self.button_right)
+        self.button_save = xbmcgui.ControlButton(
+            960, 560,
+            86, 30,
+            ADDON.getLocalizedString(30502),    # Save
+            focusTexture = self.tvl,
+            noFocusTexture = self.tvg
+        )
+        controls.append(self.button_save)
+        self.cellar.append(self.button_save)
+        self.button_cancel = xbmcgui.ControlButton(
+            1051, 560,
+            86, 30,
+            ADDON.getLocalizedString(30503),    # Cancel
+            focusTexture = self.tvl,
+            noFocusTexture = self.tvg
+        )
+        controls.append(self.button_cancel)
+        self.cellar.append(self.button_cancel)
+        self.page_label = xbmcgui.ControlLabel(
+            270, 560,
+            66, 30,
+            ''
+        )
+        controls.append(self.page_label)
+
+        self.addControls(controls)
+        self.redraw()
+
+    def __del__(self):
+        del self.buttons[:]
+        del self.caption
+        del self.button_left
+        del self.button_right
+        del self.button_save
+        del self.button_cancel
+
+    def onAction(self, action):
+        aid = action.getId()
+        if aid in [ACTION_PARENT_DIR, ACTION_PREVIOUS_MENU, KEY_NAV_BACK, KEY_CONTEXT_MENU]:
+            self.close()
+            return
+
+        if aid in [ACTION_UP, ACTION_LEFT, ACTION_DOWN, ACTION_RIGHT] and not self.current_focus:
+            if self.buttons:
+                btn = self.buttons[0]
+                self.current_focus = (btn.getX(), btn.getY())
+                super(CategoriesMenu, self).setFocus(btn)
+                return
+
+        if aid == ACTION_DOWN:
+            self.update_focus_down()
+        elif aid == ACTION_UP:
+            self.update_focus_up()
+        elif aid == ACTION_RIGHT:
+            self.update_focus_right()
+        elif aid == ACTION_LEFT:
+            self.update_focus_left()
+
+    def update_focus_down(self):
+        if not self.current_focus: return
+        x, y = self.current_focus
+        need_refocus = False    # focus to next button after cellar or still last
+        if (x==self.buttons[-1].getX() and y == self.buttons[-1].getY()) \
+                or y == 170+(self.btn_height+2)*(self.CATS_PER_COLUMN-1):
+            if not self.is_cellar:
+                self.is_cellar = True
+                super(CategoriesMenu, self).setFocus(self.cellar[self.cellar_position])
+                return
+            if x == self.buttons[-1].getX():
+                self.current_focus = (-1, -1)
+                if self.is_cellar: self.is_cellar = False
+                self.scroll_to_right()
+                return
+            x = x+self.btn_width+6
+            y = 170-self.btn_height-2
+            need_refocus = True
+        if not self.is_cellar or (self.is_cellar and need_refocus):
+            reposition = self.btn_height+2
+        else:
+            reposition = 0
+        for btn in self.buttons:
+            if btn.getX() == x and btn.getY()-reposition == y:
+                self.current_focus = (btn.getX(), btn.getY())
+                super(CategoriesMenu, self).setFocus(btn)
+                break
+        if self.is_cellar:
+            self.is_cellar = False
+        return
+    def update_focus_up(self):
+        if not self.current_focus: return
+        x, y = self.current_focus
+        need_refocus = False
+        if y == 170:
+            if not self.is_cellar:
+                self.is_cellar = True
+                super(CategoriesMenu, self).setFocus(self.cellar[self.cellar_position])
+                return
+            if x == 180:
+                self.current_focus = (-2, -2)
+                if self.is_cellar: self.is_cellar = False
+                self.scroll_to_left()
+                return
+            x = x-self.btn_width-6
+            y = 170+(self.btn_height+2)*(self.CATS_PER_COLUMN)
+            need_refocus = True
+        if not self.is_cellar or (self.is_cellar and need_refocus):
+            reposition = self.btn_height+2
+        else:
+            reposition = 0
+        for btn in self.buttons:
+            if btn.getX() == x and btn.getY()+reposition == y:
+                self.current_focus = (btn.getX(), btn.getY())
+                super(CategoriesMenu, self).setFocus(btn)
+                break
+        if self.is_cellar:
+            self.is_cellar = False
+        return
+    def update_focus_right(self):
+        if self.is_cellar:
+            if self.cellar_position == len(self.cellar)-1:
+                self.cellar_position = 0
+            else:
+                self.cellar_position += 1
+
+            super(CategoriesMenu, self).setFocus(self.cellar[self.cellar_position])
+            return
+        if not self.current_focus: return
+        x, y = self.current_focus
+        if x == self.buttons[-1].getX():
+            self.scroll_to_right()
+            return
+        is_found = False
+        for btn in self.buttons:
+            if btn.getX()-self.btn_width-6 == x and btn.getY() == y:
+                self.current_focus = (btn.getX(), btn.getY())
+                super(CategoriesMenu, self).setFocus(btn)
+                is_found = True
+                break
+        if not is_found:
+            self.current_focus = (self.buttons[-1].getX(), self.buttons[-1].getY())
+            super(CategoriesMenu, self).setFocus(self.buttons[-1])
+        return
+    def update_focus_left(self):
+        if self.is_cellar:
+            if self.cellar_position == 0:
+                self.cellar_position = len(self.cellar)-1
+            else: 
+                self.cellar_position -= 1
+            super(CategoriesMenu, self).setFocus(self.cellar[self.cellar_position])
+            return
+        if not self.current_focus: return
+        x, y = self.current_focus
+        if x == self.buttons[0].getX():
+            self.scroll_to_left()
+            return
+        for btn in self.buttons:
+            if btn.getX()+self.btn_width+6 == x and btn.getY() == y:
+                self.current_focus = (btn.getX(), btn.getY())
+                super(CategoriesMenu, self).setFocus(btn)
+                break
+        return
+
+    def onControl(self, control):
+        if not isinstance(control, xbmcgui.ControlButton): return
+        label = control.getLabel()
+        if label == '<':
+            self.scroll_to_left()
+        elif label == '>':
+            self.scroll_to_right()
+
+    def scroll_to_left(self):
+        self.start_column -= self.COLUMNS_PER_PAGE
+        if self.start_column < 0:
+            self.start_column = (self.pages-1) * self.COLUMNS_PER_PAGE
+        if self.current_focus:
+            x, y = self.current_focus
+            if x > 0:
+                self.current_focus = (180+(self.btn_width+6)*(self.COLUMNS_PER_PAGE-1), y)
+        self.redraw()
+
+    def scroll_to_right(self):
+        self.start_column += self.COLUMNS_PER_PAGE
+        if self.start_column > int(len(self.categories) / self.CATS_PER_COLUMN):
+            self.start_column = 0
+        if self.current_focus:
+            x, y = self.current_focus
+            if x > 0:
+                self.current_focus = (180, y)
+        self.redraw()
+        
+    def redraw(self):
+        x = y = 0
+        cdict = {}
+        self.removeControls(self.buttons)
+        del self.buttons[:]
+        for category in self.categories[self.start_column*self.CATS_PER_COLUMN:]:
+            control = xbmcgui.ControlRadioButton(
+                180+(self.btn_width+6)*x,
+                170+(self.btn_height+2)*y,
+                self.btn_width,
+                self.btn_height,
+                category.descr,
+                noFocusTexture=self.tvg,
+                focusTexture=self.tvl,
+                focusOnTexture=self.tvl,
+                noFocusOnTexture=self.tvl,
+                focusOffTexture=self.tvg,
+                noFocusOffTexture=self.tvg
+            )
+            self.buttons.append(control)
+            cdict[category] = control
+            y += 1
+            if y % self.CATS_PER_COLUMN == 0: 
+                x += 1
+                y = 0
+            if x == self.COLUMNS_PER_PAGE: break
+        self.addControls(self.buttons)
+        if self.current_focus == (-1,-1):       # focus to first item
+            self.current_focus = (self.buttons[0].getX(), self.buttons[0].getY())
+            super(CategoriesMenu, self).setFocus(self.buttons[0])
+        elif self.current_focus == (-2, -2):    # focus to last item
+            self.current_focus = (self.buttons[-1].getX(), self.buttons[-1].getY())
+            super(CategoriesMenu, self).setFocus(self.buttons[-1])
+        elif self.current_focus:                # update focus after scroll
+            x, y = self.current_focus
+            mrx = 0
+            rbtn = None
+            is_mr = False
+            for btn in self.buttons:
+                if btn.getX() == x and btn.getY() == y:
+                    super(CategoriesMenu, self).setFocus(btn)
+                    is_mr = True
+                    break
+                if x > mrx and btn.getY() == y:
+                    mrx = x
+                    rbtn = btn
+            if not is_mr:
+                if rbtn:
+                    btn = rbtn
+                else:
+                    btn = self.buttons[-1]
+                self.current_focus = (btn.getX(), btn.getY())
+                super(CategoriesMenu, self).setFocus(btn)
+
+        self.page_label.setLabel("%s/%s" % (self.start_column/self.COLUMNS_PER_PAGE+1, self.pages))
+
+        for category,control in cdict.iteritems():
+            control.setSelected(category.is_active)
+        if self.is_cellar:
+            super(CategoriesMenu, self).setFocus(self.cellar[self.cellar_position])
+
+    #for i in range(len(categories)):
+        #if selected == categories[i].descr:
+            #categories[i].is_active = new_value
+            #self.database.updateCategories(categories,cache=True)
+    #self.database.updateCategories(categories,cache=False)  # write to db
 
 class ChannelsMenu(xbmcgui.WindowXMLDialog):
     C_CHANNELS_LIST = 6000
