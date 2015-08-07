@@ -1125,6 +1125,7 @@ class CategoriesMenu(xbmcgui.WindowDialog):
 
     database = None
     buttons = []
+    cdict = {}          # buttons storage with categories
     cellar = []         # left/right and save/cancel buttons
     cellar_position = 0
     is_cellar = False   # true when focus assigned to anything from cellar
@@ -1143,72 +1144,63 @@ class CategoriesMenu(xbmcgui.WindowDialog):
         if len(self.categories) % (self.CATS_PER_COLUMN*self.COLUMNS_PER_PAGE) != 0:
             self.pages += 1
 
-        control = xbmcgui.ControlImage( # background
+        self.main_window = xbmcgui.ControlImage( # background
             150, 100,
             1010, 510,
             "%s/resources/skins/%s/media/%s" % \
                         (ADDON.getAddonInfo('path'), SKIN, "menu-stream.png")
         )
-        controls.append(control)
         self.caption = xbmcgui.ControlLabel( # 'Change your active categories
             150+20, 100+20,
             320, 32,
             ADDON.getLocalizedString(31003)
         )
-        controls.append(self.caption)
-        self.button_left = xbmcgui.ControlButton(
-            180, 560,
-            36, 30,
-            '<',
-            focusTexture = self.tvl,
-            noFocusTexture = self.tvg
-        )
-        controls.append(self.button_left)
-        self.cellar.append(self.button_left)
-        self.button_right = xbmcgui.ControlButton(
-            220, 560,
-            36, 30,
-            '>',
-            focusTexture = self.tvl,
-            noFocusTexture = self.tvg
-        )
-        controls.append(self.button_right)
-        self.cellar.append(self.button_right)
-        self.button_save = xbmcgui.ControlButton(
-            960, 560,
-            86, 30,
-            ADDON.getLocalizedString(30502),    # Save
-            focusTexture = self.tvl,
-            noFocusTexture = self.tvg
-        )
-        controls.append(self.button_save)
-        self.cellar.append(self.button_save)
-        self.button_cancel = xbmcgui.ControlButton(
-            1051, 560,
-            86, 30,
-            ADDON.getLocalizedString(30503),    # Cancel
-            focusTexture = self.tvl,
-            noFocusTexture = self.tvg
-        )
-        controls.append(self.button_cancel)
-        self.cellar.append(self.button_cancel)
         self.page_label = xbmcgui.ControlLabel(
             270, 560,
             66, 30,
             ''
         )
-        controls.append(self.page_label)
+        self.cellar.append( xbmcgui.ControlButton(
+            180, 560,
+            36, 30,
+            '<',
+            focusTexture = self.tvl,
+            noFocusTexture = self.tvg
+        ))
+        self.cellar.append( xbmcgui.ControlButton(
+            220, 560,
+            36, 30,
+            '>',
+            focusTexture = self.tvl,
+            noFocusTexture = self.tvg
+        ))
+        self.cellar.append( xbmcgui.ControlButton(
+            960, 560,
+            86, 30,
+            ADDON.getLocalizedString(30502),    # Save
+            focusTexture = self.tvl,
+            noFocusTexture = self.tvg
+        ))
+        self.cellar.append( xbmcgui.ControlButton(
+            1051, 560,
+            86, 30,
+            ADDON.getLocalizedString(30503),    # Cancel
+            focusTexture = self.tvl,
+            noFocusTexture = self.tvg
+        ))
 
-        self.addControls(controls)
+        self.addControls([self.main_window, self.caption, self.page_label])
+        self.addControls(self.cellar)
         self.redraw()
 
-    def __del__(self):
+    def close(self):
+        self.removeControls([self.main_window, self.caption, self.page_label])
+        self.removeControls(self.cellar)
+        self.removeControls(self.buttons)
+        del self.cellar[:]
         del self.buttons[:]
-        del self.caption
-        del self.button_left
-        del self.button_right
-        del self.button_save
-        del self.button_cancel
+        self.cdict.clear()
+        super(CategoriesMenu, self).close()
 
     def onAction(self, action):
         aid = action.getId()
@@ -1343,6 +1335,12 @@ class CategoriesMenu(xbmcgui.WindowDialog):
             self.scroll_to_left()
         elif label == '>':
             self.scroll_to_right()
+        elif label == 'Save':
+            self.update_selected()
+            self.database.updateCategories(self.categories,cache=False)  # write to db
+            self.close()
+        elif label == 'Cancel':
+            self.close()
 
     def scroll_to_left(self):
         self.start_column -= self.COLUMNS_PER_PAGE
@@ -1363,11 +1361,17 @@ class CategoriesMenu(xbmcgui.WindowDialog):
             if x > 0:
                 self.current_focus = (180, y)
         self.redraw()
+
+    def update_selected(self):
+        for category,ci in self.cdict.iteritems():
+            category.is_active = self.buttons[ci].isSelected()
         
     def redraw(self):
         x = y = 0
-        cdict = {}
-        self.removeControls(self.buttons)
+        self.update_selected()
+        self.cdict.clear()
+        if self.buttons:
+            self.removeControls(self.buttons)
         del self.buttons[:]
         for category in self.categories[self.start_column*self.CATS_PER_COLUMN:]:
             control = xbmcgui.ControlRadioButton(
@@ -1384,7 +1388,7 @@ class CategoriesMenu(xbmcgui.WindowDialog):
                 noFocusOffTexture=self.tvg
             )
             self.buttons.append(control)
-            cdict[category] = control
+            self.cdict[category] = len(self.buttons)-1
             y += 1
             if y % self.CATS_PER_COLUMN == 0: 
                 x += 1
@@ -1420,16 +1424,11 @@ class CategoriesMenu(xbmcgui.WindowDialog):
 
         self.page_label.setLabel("%s/%s" % (self.start_column/self.COLUMNS_PER_PAGE+1, self.pages))
 
-        for category,control in cdict.iteritems():
-            control.setSelected(category.is_active)
+        for category,ci in self.cdict.iteritems():
+            self.buttons[ci].setSelected(category.is_active)
         if self.is_cellar:
             super(CategoriesMenu, self).setFocus(self.cellar[self.cellar_position])
 
-    #for i in range(len(categories)):
-        #if selected == categories[i].descr:
-            #categories[i].is_active = new_value
-            #self.database.updateCategories(categories,cache=True)
-    #self.database.updateCategories(categories,cache=False)  # write to db
 
 class ChannelsMenu(xbmcgui.WindowXMLDialog):
     C_CHANNELS_LIST = 6000
