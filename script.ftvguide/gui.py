@@ -39,6 +39,7 @@ DEBUG = False
 MODE_EPG = 'EPG'
 MODE_TV = 'TV'
 MODE_OSD = 'OSD'
+MODE_CAT = 'CAT'
 
 ACTION_LEFT = 1
 ACTION_RIGHT = 2
@@ -120,6 +121,7 @@ class TVGuide(xbmcgui.WindowXML):
     C_MAIN_OSD_DESCRIPTION = 6003
     C_MAIN_OSD_CHANNEL_LOGO = 6004
     C_MAIN_OSD_CHANNEL_TITLE = 6005
+    C_MAIN_CATEGORIES_VISIBLE = 9
 
     def __new__(cls):
         return super(TVGuide, cls).__new__(cls, 'script-tvguide-main.xml', ADDON.getAddonInfo('path'), SKIN)
@@ -132,15 +134,17 @@ class TVGuide(xbmcgui.WindowXML):
         self.isClosing = False
         self.controlAndProgramList = list()
         self.controlCategories = []
+        self.controlCategoriesShift = 0
         self.ignoreMissingControlIds = list()
         self.channelIdx = 0
         self.focusPoint = Point()
+        self.categoriesFocus = 0
         self.epgView = EPGView()
         self.streamingService = streaming.StreamsService(ADDON)
         self.player = xbmc.Player()
         self.database = None
 
-        self.mode = MODE_EPG
+        self.mode = MODE_CAT
         self.currentChannel = None
         self.active_category_id = 0
 
@@ -194,7 +198,7 @@ class TVGuide(xbmcgui.WindowXML):
             self.epgView.cellHeight = control.getHeight() / CHANNELS_PER_PAGE
 
         if self.database:
-            self.onRedrawEPG(self.channelIdx, self.viewStartDate)
+            self.onRedrawEPG(self.channelIdx, self.viewStartDate, set_epg_mode=False)
         else:
             try:
                 self.database = src.Database()
@@ -203,6 +207,9 @@ class TVGuide(xbmcgui.WindowXML):
                 self.close()
                 return
             self.database.initialize(self.onSourceInitialized, self.isSourceInitializationCancelled)
+
+        # move date ControlLabel to up, getting area for categories
+        self.setControlPosition(self.C_MAIN_DATE_LONG, 660, -30)
 
         self.updateTimebar()
 
@@ -215,6 +222,8 @@ class TVGuide(xbmcgui.WindowXML):
             self.onActionOSDMode(action)
         elif self.mode == MODE_EPG:
             self.onActionEPGMode(action)
+        elif self.mode == MODE_CAT:
+            self.onActionCATMode(action)
 
     def onActionTVMode(self, action):
         if action.getId() == ACTION_PAGE_UP:
@@ -281,7 +290,8 @@ class TVGuide(xbmcgui.WindowXML):
 
         # catch the ESC key
         elif action.getId() == ACTION_PREVIOUS_MENU and action.getButtonCode() == KEY_ESC:
-            self.close()
+            self.mode = MODE_CAT
+            self.setFocus(self.controlCategories[self.categoriesFocus])
             return
 
         elif action.getId() == ACTION_MOUSE_MOVE:
@@ -340,6 +350,40 @@ class TVGuide(xbmcgui.WindowXML):
                 self._showContextMenu(program)
         else:
             xbmc.log('[script.ftvguide] Unhandled ActionId: ' + str(action.getId()), xbmc.LOGDEBUG)
+
+    def onActionCATMode(self, action):
+        if action.getId() in [ACTION_PARENT_DIR, KEY_NAV_BACK]:
+            self.close()
+            return
+        elif action.getId() == ACTION_PREVIOUS_MENU and action.getButtonCode() == KEY_ESC:
+            self.close()
+            return
+        elif action in [ACTION_UP, ACTION_DOWN]:
+            self.onRedrawEPG(self.channelIdx, self.viewStartDate)
+        elif action == ACTION_LEFT and self.controlCategories:
+            self.categoriesFocus -= 1
+            if self.categoriesFocus < 0:
+                self.controlCategoriesShift -= 1
+                if self.controlCategoriesShift < 0:
+                    active_size = self.database.getActiveCategoriesCount()
+                    self.controlCategoriesShift = max(0, active_size-1)
+                self.categoriesFocus = 0
+                self._clearCategories()
+                self.createCategories()
+            else:
+                self.setFocus(self.controlCategories[self.categoriesFocus])
+        elif action == ACTION_RIGHT and self.controlCategories:
+            self.categoriesFocus += 1
+            if self.categoriesFocus > len(self.controlCategories)-1:
+                self.controlCategoriesShift += 1
+                active_size = self.database.getActiveCategoriesCount()
+                if self.controlCategoriesShift > active_size-1:
+                    self.controlCategoriesShift = 0
+                self.categoriesFocus = -1
+                self._clearCategories()
+                self.createCategories()
+            else:
+                self.setFocus(self.controlCategories[self.categoriesFocus])
 
     def onClick(self, controlId):
         if controlId in [self.C_MAIN_LOADING_CANCEL, self.C_MAIN_MOUSE_EXIT]:
@@ -631,14 +675,15 @@ class TVGuide(xbmcgui.WindowXML):
         self.mode = MODE_TV
         self._clearEpg()
 
-    def onRedrawEPG(self, channelStart, startTime, focusFunction=None):
+    def onRedrawEPG(self, channelStart, startTime, focusFunction=None, set_epg_mode=True):
         if self.redrawingEPG or (self.database is not None and self.database.updateInProgress) or self.isClosing:
             debug('onRedrawEPG - already redrawing')
             return  # ignore redraw request while redrawing
         debug('onRedrawEPG')
 
         self.redrawingEPG = True
-        self.mode = MODE_EPG
+        if set_epg_mode:
+            self.mode = MODE_EPG
         self._showControl(self.C_MAIN_EPG)
         self.updateTimebar(scheduleTimer=False)
 
@@ -745,13 +790,13 @@ class TVGuide(xbmcgui.WindowXML):
         focusControl = focusFunction(self.focusPoint)
         controls = [elem.control for elem in self.controlAndProgramList]
         self.addControls(controls)
-        if focusControl is not None:
+        if focusControl is not None and self.mode==MODE_EPG:
             debug('onRedrawEPG - setFocus %d' % focusControl.getId())
             self.setFocus(focusControl)
 
         self.ignoreMissingControlIds.extend([elem.control.getId() for elem in self.controlAndProgramList])
 
-        if focusControl is None and len(self.controlAndProgramList) > 0:
+        if focusControl is None and len(self.controlAndProgramList) and self.mode==MODE_EPG > 0:
             self.setFocus(self.controlAndProgramList[0].control)
 
         self.createCategories()
@@ -770,7 +815,9 @@ class TVGuide(xbmcgui.WindowXML):
                 except RuntimeError:
                     pass  # happens if we try to remove a control that doesn't exist
         del self.controlAndProgramList[:]
+        self._clearCategories()
 
+    def _clearCategories(self):
         self.removeControls(self.controlCategories)
         del self.controlCategories[:]
 
@@ -792,7 +839,7 @@ class TVGuide(xbmcgui.WindowXML):
     def onSourceInitialized(self, success):
         if success:
             self.notification = Notification(self.database, ADDON.getAddonInfo('path'))
-            self.onRedrawEPG(0, self.viewStartDate)
+            self.onRedrawEPG(0, self.viewStartDate, set_epg_mode=False)
 
     def onSourceProgressUpdate(self, percentageComplete):
         control = self.getControl(self.C_MAIN_LOADING_PROGRESS)
@@ -948,6 +995,11 @@ class TVGuide(xbmcgui.WindowXML):
         if control:
             control.setImage(image.encode('utf-8'))
 
+    def setControlPosition(self, controlId, x, y):
+        control = self.getControl(controlId)
+        if control and x and y:
+            control.setPosition(x,y)
+
     def setControlLabel(self, controlId, label):
         control = self.getControl(controlId)
         if control and label:
@@ -992,7 +1044,7 @@ class TVGuide(xbmcgui.WindowXML):
 
     def createCategories(self, ):
         # buttons for filter of categories
-        if self.mode != MODE_EPG:
+        if self.mode not in [MODE_EPG, MODE_CAT]:
             return
         control = self.getControl(self.C_MAIN_EPG_VIEW_MARKER)
         if control:
@@ -1003,30 +1055,53 @@ class TVGuide(xbmcgui.WindowXML):
         categories = self.database.getAllCategories()
         if not categories or len(categories) <= 0: return
         active = [a for a in categories if a.is_active]
+        active = active[self.controlCategoriesShift:]
 
-        sc = 8
-        width = min(100, self.epgView.width / sc)
+        sc = self.C_MAIN_CATEGORIES_VISIBLE
+        width = min(102, self.epgView.width / sc)
         height = self.epgView.cellHeight / 2
         controls = []
         tvg = 'tvguide-program-grey.png'
         tvl = 'tvguide-program-grey-focus.png'
+        control = xbmcgui.ControlButton(
+            x, y-height*2-4, 30, height, '<',
+            noFocusTexture=tvg,
+            focusTexture=tvl
+        )
+        controls.append(control)
+        x += 30
+        decs = 0
         for n in range(0, min(sc,len(active)-1) +1 ):
             _tvg = tvg if active[n]._id != self.active_category_id else tvl
             _tvl = tvl
             control = xbmcgui.ControlButton(
-                x + 30 + width*(n),
+                x + width*(n) - decs*(n-7),
                 y - height*2 - 4,
-                width,
+                width - decs,
                 height,
                 active[n].descr,
                 noFocusTexture=_tvg,
                 focusTexture=_tvl
             )
+            if n == 6: decs = 1   # first buttons will wider for row align
             controls.append(control)
+        control = xbmcgui.ControlButton(
+            x + width*(sc+1) - decs*3, 
+            y-height*2-4, 30, height, '>',
+            noFocusTexture=tvg,
+            focusTexture=tvl
+        )
+        controls.append(control)
         if controls:
             self.addControls(controls)
             self.controlCategories = controls
             self.ignoreMissingControlIds.extend([c.getId() for c in self.controlCategories])
+            if self.mode == MODE_CAT:
+                if self.categoriesFocus == -1:
+                    self.categoriesFocus = len(self.controlCategories)-1
+                self.setFocus(self.controlCategories[self.categoriesFocus])
+        else:
+            self.mode = MODE_EPG
 
 
 class PopupMenu(xbmcgui.WindowXMLDialog):

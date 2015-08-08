@@ -663,6 +663,12 @@ class Database(object):
         if not c: return None
         return c.fetchone()['id']
 
+    def getActiveCategoriesCount(self):
+        if not self.categories_cache:
+            cats = self._invokeAndBlockForResult(self._getAllCategories)
+            self.categories_cache = cats
+        return len([a for a in self.categories_cache if a.is_active])
+
     def getAllCategories(self):
         if not self.categories_cache:
             cats = self._invokeAndBlockForResult(self._getAllCategories)
