@@ -121,7 +121,7 @@ class TVGuide(xbmcgui.WindowXML):
     C_MAIN_OSD_DESCRIPTION = 6003
     C_MAIN_OSD_CHANNEL_LOGO = 6004
     C_MAIN_OSD_CHANNEL_TITLE = 6005
-    C_MAIN_CATEGORIES_VISIBLE = 9
+    C_MAIN_CATEGORIES_VISIBLE = 10
 
     def __new__(cls):
         return super(TVGuide, cls).__new__(cls, 'script-tvguide-main.xml', ADDON.getAddonInfo('path'), SKIN)
@@ -363,27 +363,41 @@ class TVGuide(xbmcgui.WindowXML):
         elif action == ACTION_LEFT and self.controlCategories:
             self.categoriesFocus -= 1
             if self.categoriesFocus < 0:
-                self.controlCategoriesShift -= 1
-                if self.controlCategoriesShift < 0:
-                    active_size = self.database.getActiveCategoriesCount()
-                    self.controlCategoriesShift = max(0, active_size-1)
-                self.categoriesFocus = 0
-                self._clearCategories()
-                self.createCategories()
+                self.categoriesScrollToLeft()
             else:
                 self.setFocus(self.controlCategories[self.categoriesFocus])
         elif action == ACTION_RIGHT and self.controlCategories:
             self.categoriesFocus += 1
             if self.categoriesFocus > len(self.controlCategories)-1:
-                self.controlCategoriesShift += 1
-                active_size = self.database.getActiveCategoriesCount()
-                if self.controlCategoriesShift > active_size-1:
-                    self.controlCategoriesShift = 0
-                self.categoriesFocus = -1
-                self._clearCategories()
-                self.createCategories()
+                self.categoriesScrollToRight()
             else:
                 self.setFocus(self.controlCategories[self.categoriesFocus])
+
+    def categoriesScrollToLeft(self):
+        if self.controlCategoriesShift!= -2:
+            self.controlCategoriesShift -= 1
+            if self.controlCategoriesShift < 0:
+                active_size = self.database.getActiveCategoriesCount()
+                self.controlCategoriesShift = max(0, active_size-1)
+            self.categoriesFocus = 0
+            self._clearCategories()
+            self.createCategories()
+        else:
+            self.categoriesFocus = len(self.controlCategories)-1
+            self.setFocus(self.controlCategories[self.categoriesFocus])
+
+    def categoriesScrollToRight(self):
+        if self.controlCategoriesShift != -2:
+            self.controlCategoriesShift += 1
+            active_size = self.database.getActiveCategoriesCount()
+            if self.controlCategoriesShift > active_size-1:
+                self.controlCategoriesShift = 0
+            self.categoriesFocus = -1
+            self._clearCategories()
+            self.createCategories()
+        else:
+            self.categoriesFocus = 0
+            self.setFocus(self.controlCategories[self.categoriesFocus])
 
     def onClick(self, controlId):
         if controlId in [self.C_MAIN_LOADING_CANCEL, self.C_MAIN_MOUSE_EXIT]:
@@ -1032,6 +1046,12 @@ class TVGuide(xbmcgui.WindowXML):
         if not control or not isinstance(control, xbmcgui.ControlButton):
             return False
         label = control.getLabel()
+        if label == '<':
+            self.categoriesScrollToLeft()
+            return
+        elif label == '>':
+            self.categoriesScrollToRight()
+            return
         categories = self.database.getAllCategories()
         descrs = [c.descr for c in categories]
         if label not in descrs: return False
@@ -1055,7 +1075,8 @@ class TVGuide(xbmcgui.WindowXML):
         categories = self.database.getAllCategories()
         if not categories or len(categories) <= 0: return
         active = [a for a in categories if a.is_active]
-        active = active[self.controlCategoriesShift:]
+        if self.controlCategoriesShift != -2:
+            active = active[self.controlCategoriesShift:]
 
         sc = self.C_MAIN_CATEGORIES_VISIBLE
         width = min(102, self.epgView.width / sc)
@@ -1063,15 +1084,20 @@ class TVGuide(xbmcgui.WindowXML):
         controls = []
         tvg = 'tvguide-program-grey.png'
         tvl = 'tvguide-program-grey-focus.png'
-        control = xbmcgui.ControlButton(
-            x, y-height*2-4, 30, height, '<',
-            noFocusTexture=tvg,
-            focusTexture=tvl
-        )
-        controls.append(control)
-        x += 30
+        if self.database.getActiveCategoriesCount() > sc:
+            control = xbmcgui.ControlButton(
+                x, y-height*2-4, 30, height, '<',
+                noFocusTexture=tvg,
+                focusTexture=tvl
+            )
+            controls.append(control)
+            if self.controlCategoriesShift == -2:
+                self.controlCategoriesShift = 0
+            x += 30
+        else:
+            self.controlCategoriesShift = -2
         decs = 0
-        for n in range(0, min(sc,len(active)-1) +1 ):
+        for n in range(0, min(sc-1,len(active)-1) +1 ):
             _tvg = tvg if active[n]._id != self.active_category_id else tvl
             _tvl = tvl
             control = xbmcgui.ControlButton(
@@ -1085,13 +1111,14 @@ class TVGuide(xbmcgui.WindowXML):
             )
             if n == 6: decs = 1   # first buttons will wider for row align
             controls.append(control)
-        control = xbmcgui.ControlButton(
-            x + width*(sc+1) - decs*3, 
-            y-height*2-4, 30, height, '>',
-            noFocusTexture=tvg,
-            focusTexture=tvl
-        )
-        controls.append(control)
+        if self.database.getActiveCategoriesCount() > sc:
+            control = xbmcgui.ControlButton(
+                x + width*(sc) - decs*3, 
+                y-height*2-4, 30, height, '>',
+                noFocusTexture=tvg,
+                focusTexture=tvl
+            )
+            controls.append(control)
         if controls:
             self.addControls(controls)
             self.controlCategories = controls
