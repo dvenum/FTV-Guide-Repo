@@ -468,7 +468,7 @@ class TVGuide(xbmcgui.WindowXML):
             self.onRedrawEPG(self.channelIdx, self.viewStartDate)
 
         elif buttonClicked == PopupMenu.C_POPUP_CHOOSE_STREAM:
-            d = StreamSetupDialog(self.database, program.channel)
+            d = StreamSetupDialog(self.database, program.channel, program)
             d.doModal()
             del d
 
@@ -1669,6 +1669,7 @@ class StreamSetupDialog(xbmcgui.WindowXMLDialog):
     C_STREAM_STRM_TAB = 101
     C_STREAM_FAVOURITES_TAB = 102
     C_STREAM_ADDONS_TAB = 103
+    C_STREAM_CATEGORY_TAB = 104
     C_STREAM_STRM_BROWSE = 1001
     C_STREAM_STRM_FILE_LABEL = 1005
     C_STREAM_STRM_PREVIEW = 1002
@@ -1685,17 +1686,23 @@ class StreamSetupDialog(xbmcgui.WindowXMLDialog):
     C_STREAM_ADDONS_PREVIEW = 3005
     C_STREAM_ADDONS_OK = 3006
     C_STREAM_ADDONS_CANCEL = 3007
+    C_STREAM_CATEGORIES = 4001
+    C_STREAM_CATEGORIES_ACTIVE = 4008
+    C_STREAM_CATEGORIES_PREVIEW = 4005
+    C_STREAM_CATEGORIES_OK = 4006
+    C_STREAM_CATEGORIES_CANCEL = 4007
 
     C_STREAM_VISIBILITY_MARKER = 100
 
     VISIBLE_STRM = 'strm'
     VISIBLE_FAVOURITES = 'favourites'
     VISIBLE_ADDONS = 'addons'
+    VISIBLE_CATEGORIES = 'categories'
 
-    def __new__(cls, database, channel):
+    def __new__(cls, database, channel, program):
         return super(StreamSetupDialog, cls).__new__(cls, 'script-tvguide-streamsetup.xml', ADDON.getAddonInfo('path'), SKIN)
 
-    def __init__(self, database, channel):
+    def __init__(self, database, channel, program):
         """
         @type database: source.Database
         @type channel:source.Channel
@@ -1703,6 +1710,7 @@ class StreamSetupDialog(xbmcgui.WindowXMLDialog):
         super(StreamSetupDialog, self).__init__()
         self.database = database
         self.channel = channel
+        self.program = program
 
         self.player = xbmc.Player()
         self.previousAddonId = None
@@ -1739,6 +1747,34 @@ class StreamSetupDialog(xbmcgui.WindowXMLDialog):
         listControl = self.getControl(StreamSetupDialog.C_STREAM_ADDONS)
         listControl.addItems(items)
         self.updateAddonInfo()
+
+        self.categories = self.database.getAllCategories()
+        self.updateCategoriesList()
+
+    def updateCategoriesList(self):
+        """ update to actual two lists: all categories and assigned to channel cats
+        """
+        full = list()
+        active = list()
+
+        full_list = self.getControl(StreamSetupDialog.C_STREAM_CATEGORIES)
+        active_list = self.getControl(StreamSetupDialog.C_STREAM_CATEGORIES_ACTIVE)
+
+        categories_assigned = self.database.getAssignedCategories(program)
+        for c in self.categories:
+            item = xbmcgui.ListItem(c.descr)
+            item.setProperty('category_id', str(c._id))
+            full.append(item)
+
+        for c in self.categories_assigned:
+            item = xbmcgui.ListItem(c.descr)
+            item.setProperty('category_id', str(c._id))
+            active.append(item)
+
+        full_list.reset()
+        active_list.reset()
+        full_list.addItems(full)
+        active_list.addItems(active)
 
     def onAction(self, action):
         if action.getId() in [ACTION_PARENT_DIR, ACTION_PREVIOUS_MENU, KEY_NAV_BACK, KEY_CONTEXT_MENU]:
@@ -1779,12 +1815,13 @@ class StreamSetupDialog(xbmcgui.WindowXMLDialog):
         elif controlId in [self.C_STREAM_ADDONS_CANCEL, self.C_STREAM_FAVOURITES_CANCEL, self.C_STREAM_STRM_CANCEL]:
             self.close()
 
-        elif controlId in [self.C_STREAM_ADDONS_PREVIEW, self.C_STREAM_FAVOURITES_PREVIEW, self.C_STREAM_STRM_PREVIEW]:
+        elif controlId in [self.C_STREAM_ADDONS_PREVIEW, self.C_STREAM_FAVOURITES_PREVIEW, self.C_STREAM_STRM_PREVIEW, self.C_STREAM_CATEGORIES_PREVIEW]:
             if self.player.isPlaying():
                 self.player.stop()
                 self.getControl(self.C_STREAM_ADDONS_PREVIEW).setLabel(strings(PREVIEW_STREAM))
                 self.getControl(self.C_STREAM_FAVOURITES_PREVIEW).setLabel(strings(PREVIEW_STREAM))
                 self.getControl(self.C_STREAM_STRM_PREVIEW).setLabel(strings(PREVIEW_STREAM))
+                self.getControl(self.C_STREAM_CATEGORIES_PREVIEW).setLabel(strings(PREVIEW_STREAM))
                 return
 
             stream = None
@@ -1808,6 +1845,7 @@ class StreamSetupDialog(xbmcgui.WindowXMLDialog):
                     self.getControl(self.C_STREAM_ADDONS_PREVIEW).setLabel(strings(STOP_PREVIEW))
                     self.getControl(self.C_STREAM_FAVOURITES_PREVIEW).setLabel(strings(STOP_PREVIEW))
                     self.getControl(self.C_STREAM_STRM_PREVIEW).setLabel(strings(STOP_PREVIEW))
+                    self.getControl(self.C_STREAM_CATEGORIES_PREVIEW).setLabel(strings(STOP_PREVIEW))
 
     def onFocus(self, controlId):
         if controlId == self.C_STREAM_STRM_TAB:
@@ -1816,6 +1854,8 @@ class StreamSetupDialog(xbmcgui.WindowXMLDialog):
             self.getControl(self.C_STREAM_VISIBILITY_MARKER).setLabel(self.VISIBLE_FAVOURITES)
         elif controlId == self.C_STREAM_ADDONS_TAB:
             self.getControl(self.C_STREAM_VISIBILITY_MARKER).setLabel(self.VISIBLE_ADDONS)
+        elif controlId == self.C_STREAM_CATEGORY_TAB:
+            self.getControl(self.C_STREAM_VISIBILITY_MARKER).setLabel(self.VISIBLE_CATEGORIES)
 
     def updateAddonInfo(self):
         listControl = self.getControl(self.C_STREAM_ADDONS)

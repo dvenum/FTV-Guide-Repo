@@ -60,7 +60,7 @@ class Channel(object):
 
 
 class Program(object):
-    def __init__(self, channel, title, startDate, endDate, description, imageLarge=None, imageSmall=None,
+    def __init__(self, id, channel, title, startDate, endDate, description, imageLarge=None, imageSmall=None,
                  notificationScheduled=None, categories=[]):
         """
 
@@ -74,6 +74,7 @@ class Program(object):
         @param imageSmall:
         @param categories: list of Category objects
         """
+        self.id = id
         self.channel = channel
         self.title = title
         self.startDate = startDate
@@ -562,7 +563,7 @@ class Database(object):
                   [channel.id, self.source.KEY, now, now])
         row = c.fetchone()
         if row:
-            program = Program(channel, row['title'], row['start_date'], row['end_date'], row['description'],
+            program = Program(row['id'], channel, row['title'], row['start_date'], row['end_date'], row['description'],
                               row['image_large'], row['image_small'])
         c.close()
 
@@ -579,7 +580,7 @@ class Database(object):
             [program.channel.id, self.source.KEY, program.endDate])
         row = c.fetchone()
         if row:
-            nextProgram = Program(program.channel, row['title'], row['start_date'], row['end_date'], row['description'],
+            nextProgram = Program(row['id'], program.channel, row['title'], row['start_date'], row['end_date'], row['description'],
                                   row['image_large'], row['image_small'])
         c.close()
 
@@ -596,7 +597,7 @@ class Database(object):
             [program.channel.id, self.source.KEY, program.startDate])
         row = c.fetchone()
         if row:
-            previousProgram = Program(program.channel, row['title'], row['start_date'], row['end_date'],
+            previousProgram = Program(row['id'], program.channel, row['title'], row['start_date'], row['end_date'],
                                       row['description'], row['image_large'], row['image_small'])
         c.close()
 
@@ -634,7 +635,7 @@ class Database(object):
                 '\',\''.join(channelMap.keys())) + '\') AND p.source=? AND p.end_date > ? AND p.start_date < ? %s' % ifst,
             params)
         for row in c:
-            program = Program(channelMap[row['channel']], row['title'], row['start_date'], row['end_date'],
+            program = Program(row['id'], channelMap[row['channel']], row['title'], row['start_date'], row['end_date'],
                               row['description'], row['image_large'], row['image_small'], row['notification_scheduled'])
             program.categories = self._getProgramCategories(row['id'])
             programList.append(program)
@@ -1058,7 +1059,7 @@ class XMLTVSource(Source):
                         icon = iconElement.get("src")
                     if not description:
                         description = strings(NO_DESCRIPTION)
-                    result = Program(channel, elem.findtext('title'), self.parseXMLTVDate(elem.get('start')),
+                    result = Program('-1', channel, elem.findtext('title'), self.parseXMLTVDate(elem.get('start')),
                                      self.parseXMLTVDate(elem.get('stop')), description, imageSmall=icon,
                                      categories=categories)
 
